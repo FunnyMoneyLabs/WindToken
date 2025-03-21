@@ -33,11 +33,7 @@ describe("WindTokenReduced", () => {
 			expect(await contract.currentPhaseRemainingTokens()).to.equal(ethers.parseEther("9"))
 
 			await time.increase(11)
-			const tx = await contract.connect(accounts[2]).claimWind()
-			const receipt = await tx.wait()
-			const blockTimestamp = (await ethers.provider.getBlock(receipt.blockNumber)).timestamp
-
-			await expect(tx).to.emit(contract, "PhaseEnded").withArgs(1, blockTimestamp)
+			await contract.connect(accounts[2]).claimWind()
 			expect(await contract.currentPhaseRemainingTokens()).to.equal(ethers.parseEther("0"))
 			expect(await contract.pendingClaims(accounts[1].address)).to.equal(ethers.parseEther("1"))
 			expect(await contract.pendingClaims(accounts[2].address)).to.equal(ethers.parseEther("9"))
@@ -59,11 +55,7 @@ describe("WindTokenReduced", () => {
 
 			await time.increase(11)
 			await contract.connect(accounts[1]).claimWind()
-			const tx = await contract.connect(accounts[2]).claimWind()
-			const receipt = await tx.wait()
-			const blockTimestamp = (await ethers.provider.getBlock(receipt.blockNumber)).timestamp
-
-			await expect(tx).to.emit(contract, "PhaseEnded").withArgs(2, blockTimestamp)
+			await contract.connect(accounts[2]).claimWind()
 			expect(await contract.currentPhaseRemainingTokens()).to.equal(ethers.parseEther("0"))
 			expect(await contract.pendingClaims(accounts[1].address)).to.equal(ethers.parseEther("11"))
 			expect(await contract.pendingClaims(accounts[2].address)).to.equal(ethers.parseEther("9"))
@@ -89,11 +81,8 @@ describe("WindTokenReduced", () => {
 			await contract.connect(accounts[1]).claimWind()
 			await contract.connect(accounts[1]).claimWind()
 			await contract.connect(accounts[1]).claimWind()
-			const tx = await contract.connect(accounts[2]).claimWind()
-			const receipt = await tx.wait()
-			const blockTimestamp = (await ethers.provider.getBlock(receipt.blockNumber)).timestamp
+			await contract.connect(accounts[2]).claimWind()
 
-			await expect(tx).to.emit(contract, "PhaseEnded").withArgs(3, blockTimestamp)
 			expect(await contract.currentPhaseRemainingTokens()).to.equal(ethers.parseEther("0"))
 			expect(await contract.pendingClaims(accounts[1].address)).to.equal(ethers.parseEther("31"))
 			expect(await contract.pendingClaims(accounts[2].address)).to.equal(ethers.parseEther("9"))

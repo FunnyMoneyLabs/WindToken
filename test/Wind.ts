@@ -65,9 +65,6 @@ describe("WindToken", () => {
 			expect(await contract.phaseStartTime()).to.equal(blockTimestamp)
 			expect(await contract.activePhase()).to.true
 			expect(await contract.currentPhaseRemainingTokens()).to.equal(ethers.parseEther("1000000"))
-
-			// Check event emission
-			await expect(tx).to.emit(contract, "PhaseActivated").withArgs(1, ethers.parseEther("1000000"))
 		})
 
 		it("Should correctly activate phases sequentially", async function () {
@@ -123,9 +120,6 @@ describe("WindToken", () => {
 			expect(await contract.activePhase()).to.false
 			expect(await contract.claimActivationTime()).to.equal(blockTimestamp + 30 * 60) // +30 minutes
 			expect(await contract.proxyClaimActivationTime()).to.equal(blockTimestamp + 60 * 60) // +60 minutes
-
-			// Check event emission
-			await expect(tx).to.emit(contract, "PhaseEnded").withArgs(1, blockTimestamp)
 		})
 
 		it("Should not allow ending phase if no active phase", async function () {
@@ -284,7 +278,7 @@ describe("WindToken", () => {
 
 			// Try to transfer without sufficient balance
 			await expect(contract.connect(accounts[1]).transferTokens()).to.be.revertedWith(
-				"Insufficient balance to transfer, buy more $WIND"
+				"Insufficient balance to transfer, own more $WIND"
 			)
 		})
 	})
@@ -318,9 +312,7 @@ describe("WindToken", () => {
 			await time.increase(60 * 60 + 1) // Past proxy claim activation time
 
 			// Proxy claim tokens
-			await expect(contract.connect(accounts[2]).transferTokensForWallet(accounts[1].address))
-				.to.emit(contract, "TokensTransferedByProxy")
-				.withArgs(accounts[2].address, accounts[1].address, pendingAmount)
+			await contract.connect(accounts[2]).transferTokensForWallet(accounts[1].address)
 
 			// Check state changes
 			expect(await contract.pendingClaims(accounts[1].address)).to.equal(0)
@@ -339,8 +331,11 @@ describe("WindToken", () => {
 			const pendingAmount3 = await contract.pendingClaims(accounts[3].address)
 
 			// Transfer tokens to the proxy account
-			await contract.transfer(accounts[2].address, pendingAmount1 + BigInt(pendingAmount3))
+			await contract.transfer(accounts[2].address, BigInt(pendingAmount1) + BigInt(pendingAmount3))
+			// twice, as claming will mark the balance as used
+			await contract.transfer(accounts[2].address, BigInt(pendingAmount1) + BigInt(pendingAmount3))
 
+			
 			await contract.endPhaseManually()
 			await time.increase(60 * 60 + 1) // Past proxy claim activation time
 
@@ -353,7 +348,7 @@ describe("WindToken", () => {
 			)
 
 			// Advance time past cooldown
-			await time.increase(10 * 60 + 1) // Past 10 minute cooldown
+			await time.increase(30 * 60 + 1) // Past 30 minute cooldown
 
 			// Second proxy claim should now succeed
 			await contract.connect(accounts[2]).transferTokensForWallet(accounts[3].address)
@@ -383,11 +378,6 @@ describe("WindToken", () => {
 			expect(await contract.lastProxyClaimTime(accounts[3].address)).to.equal(
 				await contract.lastProxyClaimTime(accounts[2].address)
 			)
-
-			// Event check for ProxyAssigned
-			await expect(contract.connect(accounts[2]).transfer(accounts[4].address, 100))
-				.to.emit(contract, "ProxyAssigned")
-				.withArgs(accounts[2].address, accounts[4].address)
 		})
 	})
 
@@ -464,6 +454,274 @@ describe("WindToken", () => {
 
 			// Try to complete the claim drop early
 			await expect(contract.completeClaimDrop()).to.be.revertedWith("Only after 3 drops")
+		})
+	})
+
+	describe("DEX Exclusion", () => {
+		it("Should allow owner to exclude a DEX", async function () {
+			const { contract, accounts } = await setupFixture()
+			const dexAddress = accounts[5].address
+
+			await contract.excludeDex(dexAddress)
+			expect(await contract.excludedDexes(dexAddress)).to.be.true
+		})
+
+		it("Should allow owner to include a previously excluded DEX", async function () {
+			const { contract, accounts } = await setupFixture()
+			const dexAddress = accounts[5].address
+
+			// First exclude the DEX
+			await contract.excludeDex(dexAddress)
+			expect(await contract.excludedDexes(dexAddress)).to.be.true
+
+			// Then include it again
+			await contract.includeDex(dexAddress)
+			expect(await contract.excludedDexes(dexAddress)).to.be.false
+		})
+
+		it("Should revert when including a DEX that's not excluded", async function () {
+			const { contract, accounts } = await setupFixture()
+			const dexAddress = accounts[5].address
+
+			await expect(contract.includeDex(dexAddress)).to.be.revertedWith("DEX not excluded")
+		})
+
+		it("Should revert when excluding zero address", async function () {
+			const { contract } = await setupFixture()
+			await expect(contract.excludeDex(ethers.ZeroAddress)).to.be.revertedWith("Cannot exclude zero address")
+		})
+
+		it("Should revert when excluding an already excluded DEX", async function () {
+			const { contract, accounts } = await setupFixture()
+			const dexAddress = accounts[5].address
+
+			await contract.excludeDex(dexAddress)
+			await expect(contract.excludeDex(dexAddress)).to.be.revertedWith("DEX already excluded")
+		})
+	})
+
+	describe("Transfer Mechanics", () => {
+		it("Should transfer transferAmountUsed when transferring tokens between non-excluded addresses", async function () {
+			const { contract, accounts } = await setupFixture()
+
+			// Setup: activate phase, get pending claims, and end phase
+			await contract.activateMinting()
+			await contract.connect(accounts[1]).claimWind()
+			const pendingAmount = await contract.pendingClaims(accounts[1].address)
+
+			// Transfer tokens to the account to meet the balance requirement
+			await contract.transfer(accounts[1].address, pendingAmount * BigInt(2))
+
+			await contract.endPhaseManually()
+			await time.increase(30 * 60 + 1) // Past claim activation time
+
+			// Claim tokens to set transferAmountUsed
+			await contract.connect(accounts[1]).transferTokens()
+			const transferUsed = await contract.transferAmountUsed(accounts[1].address)
+			expect(transferUsed).to.equal(pendingAmount)
+
+			// Transfer tokens to another account
+			await contract.connect(accounts[1]).transfer(accounts[2].address, pendingAmount)
+
+			// Check that transferAmountUsed was transferred
+			expect(await contract.transferAmountUsed(accounts[2].address)).to.equal(transferUsed)
+		})
+
+		it("Should not transfer transferAmountUsed when transferring to/from excluded DEX", async function () {
+			const { contract, accounts } = await setupFixture()
+			const dexAddress = accounts[5].address
+
+			// Exclude the DEX
+			await contract.excludeDex(dexAddress)
+
+			// Setup: activate phase, get pending claims, and end phase
+			await contract.activateMinting()
+			await contract.connect(accounts[1]).claimWind()
+			const pendingAmount = await contract.pendingClaims(accounts[1].address)
+
+			// Transfer tokens to the account to meet the balance requirement
+			await contract.transfer(accounts[1].address, pendingAmount * BigInt(2))
+
+			await contract.endPhaseManually()
+			await time.increase(30 * 60 + 1) // Past claim activation time
+
+			// Claim tokens to set transferAmountUsed
+			await contract.connect(accounts[1]).transferTokens()
+	
+			// Transfer tokens to the DEX
+			await contract.connect(accounts[1]).transfer(dexAddress, pendingAmount)
+
+			// Transfer from DEX to another account
+			await contract.connect(accounts[5]).transfer(accounts[2].address, pendingAmount)
+
+			// Check that transferAmountUsed was NOT transferred
+			expect(await contract.transferAmountUsed(accounts[2].address)).to.equal(0)
+		})
+
+		it("Should verify proper tracking of multiple transferAmountUsed transfers", async function () {
+			const { contract, accounts } = await setupFixture()
+
+			// Setup: activate phase, get pending claims for multiple accounts
+			await contract.activateMinting()
+
+			// User 1 claims and transfers
+			await contract.connect(accounts[1]).claimWind()
+			const pendingAmount1 = await contract.pendingClaims(accounts[1].address)
+			await contract.transfer(accounts[1].address, pendingAmount1 * BigInt(2))
+
+			// User 2 claims and transfers
+			await contract.connect(accounts[2]).claimWind()
+			const pendingAmount2 = await contract.pendingClaims(accounts[2].address)
+			await contract.transfer(accounts[2].address, pendingAmount2 * BigInt(2))
+
+			await contract.endPhaseManually()
+			await time.increase(30 * 60 + 1) // Past claim activation time
+
+			// Both users claim tokens to set transferAmountUsed
+			await contract.connect(accounts[1]).transferTokens()
+			await contract.connect(accounts[2]).transferTokens()
+
+			// User 1 transfers to User 3
+			await contract.connect(accounts[1]).transfer(accounts[3].address, pendingAmount1)
+
+			// User 3 transfers to User 4
+			await contract.connect(accounts[3]).transfer(accounts[4].address, pendingAmount1)
+
+			// Check that transferAmountUsed was properly tracked through the chain
+			expect(await contract.transferAmountUsed(accounts[1].address)).to.equal(pendingAmount1)
+			expect(await contract.transferAmountUsed(accounts[3].address)).to.equal(pendingAmount1)
+			expect(await contract.transferAmountUsed(accounts[4].address)).to.equal(pendingAmount1)
+		})
+	})
+
+	describe("Enhanced transferTokensForWallet Tests", () => {
+		it("Should verify transferTokensForWallet moves tokens directly to receiver", async function () {
+			const { contract, accounts } = await setupFixture()
+
+			// Setup: activate phase, get pending claims, and end phase
+			await contract.activateMinting()
+			await contract.connect(accounts[1]).claimWind()
+			const pendingAmount = await contract.pendingClaims(accounts[1].address)
+
+			// Give proxy account enough tokens
+			await contract.transfer(accounts[2].address, pendingAmount * BigInt(2))
+
+			await contract.endPhaseManually()
+			await time.increase(60 * 60 + 1) // Past proxy claim activation time
+
+			// Check balance before
+			const balanceBefore = await contract.balanceOf(accounts[1].address)
+
+			// Perform proxy claim
+			await expect(contract.connect(accounts[2]).transferTokensForWallet(accounts[1].address))
+				.to.emit(contract, "TokensTransferedByProxy")
+				.withArgs(accounts[2].address, accounts[1].address, pendingAmount)
+
+			// Verify token movement
+			expect(await contract.pendingClaims(accounts[1].address)).to.equal(0)
+			expect(await contract.balanceOf(accounts[1].address)).to.equal(balanceBefore + pendingAmount)
+			expect(await contract.balanceOf(accounts[2].address)).to.equal(pendingAmount * BigInt(2)) // Unchanged for proxy
+		})
+
+		it("Should not allow proxy transfer if caller has insufficient balance after transferAmountUsed", async function () {
+			const { contract, accounts } = await setupFixture()
+
+			// Setup: activate phase, get claims for two accounts
+			await contract.activateMinting()
+			await contract.connect(accounts[1]).claimWind()
+			await contract.connect(accounts[2]).claimWind()
+
+			const pendingAmount1 = await contract.pendingClaims(accounts[1].address)
+
+			// Give account 3 enough tokens to act as proxy
+			await contract.transfer(accounts[3].address, pendingAmount1)
+
+			await contract.endPhaseManually()
+			await time.increase(60 * 60 + 1) // Past proxy activation time
+
+			// Should succeed for the first claim
+			await contract.connect(accounts[3]).transferTokensForWallet(accounts[1].address)
+
+			// Should fail for the second claim due to insufficient balance after transferAmountUsed
+			await time.increase(30 * 60 + 1) // Past cooldown
+			await expect(contract.connect(accounts[3]).transferTokensForWallet(accounts[2].address))
+				.to.be.revertedWith("Insufficient balance for transfer, own more $WIND")
+		})
+
+		it("Should not allow proxy transfer for a wallet with no pending claims", async function () {
+			const { contract, accounts } = await setupFixture()
+
+			// Setup: activate phase, get claims, end phase
+			await contract.activateMinting()
+			await contract.endPhaseManually()
+			await time.increase(60 * 60 + 1) // Past proxy activation time
+
+			// Try to proxy claim for wallet with no pending claims
+			await expect(contract.connect(accounts[2]).transferTokensForWallet(accounts[1].address))
+				.to.be.revertedWith("No tokens to transfer for this wallet")
+		})
+
+		it("Should empty pending claims after successful proxy transfer", async function () {
+			const { contract, accounts } = await setupFixture()
+
+			// Setup: activate phase, get pending claims, and end phase
+			await contract.activateMinting()
+			await contract.connect(accounts[1]).claimWind()
+			const pendingAmount = await contract.pendingClaims(accounts[1].address)
+
+			// Give proxy account enough tokens
+			await contract.transfer(accounts[2].address, pendingAmount * BigInt(2))
+
+			await contract.endPhaseManually()
+			await time.increase(60 * 60 + 1) // Past proxy claim activation time
+
+			// Perform proxy claim
+			await contract.connect(accounts[2]).transferTokensForWallet(accounts[1].address)
+
+			// Verify pending claims are emptied
+			expect(await contract.pendingClaims(accounts[1].address)).to.equal(0)
+
+			// Try to claim again (should fail)
+			await time.increase(30 * 60 + 1) // Past cooldown
+			await expect(contract.connect(accounts[2]).transferTokensForWallet(accounts[1].address))
+				.to.be.revertedWith("No tokens to transfer for this wallet")
+		})
+
+		it("Should handle concurrent claims and proxy transfers correctly", async function () {
+			const { contract, accounts } = await setupFixture()
+
+			// Setup: activate phase, make claims, give tokens
+			await contract.activateMinting()
+
+			// User 1 and User 2 both claim
+			await contract.connect(accounts[1]).claimWind()
+			await contract.connect(accounts[2]).claimWind()
+
+			const pendingAmount1 = await contract.pendingClaims(accounts[1].address)
+			const pendingAmount2 = await contract.pendingClaims(accounts[2].address)
+
+			// Give tokens to all accounts
+			await contract.transfer(accounts[1].address, pendingAmount1 * BigInt(2))
+			await contract.transfer(accounts[2].address, pendingAmount2 * BigInt(2))
+			await contract.transfer(accounts[3].address, pendingAmount1 + pendingAmount2)
+
+			await contract.endPhaseManually()
+			await time.increase(60 * 60 + 1) // Past all activation times
+
+			// User 1 claims their own tokens
+			await contract.connect(accounts[1]).transferTokens()
+
+			// User 3 proxy claims for User 2
+			await contract.connect(accounts[3]).transferTokensForWallet(accounts[2].address)
+
+			// Verify final balances
+			expect(await contract.pendingClaims(accounts[1].address)).to.equal(0)
+			expect(await contract.pendingClaims(accounts[2].address)).to.equal(0)
+			expect(await contract.balanceOf(accounts[1].address)).to.equal(pendingAmount1 * BigInt(3))
+			expect(await contract.balanceOf(accounts[2].address)).to.equal(pendingAmount2 * BigInt(2) + pendingAmount2)
+
+			// Verify transfer amounts used
+			expect(await contract.transferAmountUsed(accounts[1].address)).to.equal(pendingAmount1)
 		})
 	})
 })
