@@ -2,11 +2,6 @@
 pragma solidity ^0.8.20;
 
 interface IWind{
-    // Events
-    event WindClaimed(address indexed receiver, uint256 amount);
-    event TokensTransfered(address indexed owner, uint256 amount);
-    event TokensTransferedByProxy(address indexed claimer, address indexed receiver, uint256 amount);
-
     // Constants
     function MAX_SUPPLY() external view returns (uint256);
     function LP_ALLOCATION() external view returns (uint256);

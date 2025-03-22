@@ -11,6 +11,7 @@ import { IWind } from "interfaces/IWind.sol";
  * @dev Implements a multi-phase token distribution with random allocation amounts
  */
 contract WindToken is ERC20, Ownable, IWind {
+    
 	uint256 public constant MAX_SUPPLY = 10_000_000 * 10 ** 18;
 	uint256 public constant LP_ALLOCATION = 1_000_000 * 10 ** 18;
 	uint256 public constant FUTURE_GROWTH_ALLOCATION = 2_000_000 * 10 ** 18;
@@ -44,6 +45,10 @@ contract WindToken is ERC20, Ownable, IWind {
 
 	// salt against bots.
 	uint256 private salt;
+
+	event WindClaimed(address indexed receiver, uint256 amount);
+	event TokensTransfered(address indexed owner, uint256 amount);
+	event TokensTransferedByProxy(address indexed claimer, address indexed receiver, uint256 amount);
 
 	constructor() ERC20(unicode"Wind 💨", "WIND") Ownable(msg.sender) {
 		// Mint all tokens at start
