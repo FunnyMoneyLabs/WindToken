@@ -3,13 +3,14 @@ pragma solidity ^0.8.20;
 
 import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import { IWind } from "interfaces/IWind.sol";
 
 /**
  * @title WindToken
  * @author bravenoob21
  * @dev Implements a multi-phase token distribution with random allocation amounts
  */
-contract WindToken is ERC20, Ownable {
+contract WindToken is ERC20, Ownable, IWind {
 	uint256 public constant MAX_SUPPLY = 10_000_000 * 10 ** 18;
 	uint256 public constant LP_ALLOCATION = 1_000_000 * 10 ** 18;
 	uint256 public constant FUTURE_GROWTH_ALLOCATION = 2_000_000 * 10 ** 18;
@@ -43,10 +44,6 @@ contract WindToken is ERC20, Ownable {
 
 	// salt against bots.
 	uint256 private salt;
-
-	event WindClaimed(address indexed receiver, uint256 amount);
-	event TokensTransfered(address indexed owner, uint256 amount);
-	event TokensTransferedByProxy(address indexed claimer, address indexed receiver, uint256 amount);
 
 	constructor() ERC20(unicode"Wind 💨", "WIND") Ownable(msg.sender) {
 		// Mint all tokens at start
